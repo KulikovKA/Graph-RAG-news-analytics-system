@@ -1,0 +1,32 @@
+# Базовая математика и работа с данными
+numpy==1.26.4
+pandas>=2.2.2
+pyarrow>=16.0.0
+sqlalchemy>=1.4.49,<2.0.0
+psycopg2-binary
+python-dotenv
+
+# Telegram API и сетевые утилиты
+aiogram>=3.0.0
+telethon
+requests
+tqdm
+pymystem3
+httpx[socks]
+aiohttp-socks
+aiohttp>=3.9.0
+email-validator>=2.0.0
+
+# LLM, LangChain и Графы
+langchain-google-genai
+langchain-huggingface
+langchain-community
+langchain-tavily
+langchain-text-splitters
+langgraph
+neo4j
+qdrant-client
+sentence-transformers
+
+# Мониторинг и эксперименты
+mlflow

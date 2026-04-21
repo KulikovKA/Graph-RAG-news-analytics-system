@@ -1,0 +1,192 @@
+version: '3.8'
+
+services:
+  # --- Databases ---
+  postgres:
+    image: postgres:15
+    container_name: graph_rag_db
+    restart: always
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: mysecretpassword
+      POSTGRES_DB: graph_rag
+    ports:
+      - "5432:5432"
+    volumes:
+      - pg_data:/var/lib/postgresql/data
+
+  neo4j:
+    image: neo4j:5.12
+    container_name: graph_rag_neo4j
+    restart: always
+    ports:
+      - "7474:7474"
+      - "7687:7687"
+    environment:
+      - NEO4J_AUTH=neo4j/mysecretpassword
+    volumes:
+      - neo4j_data:/data
+
+  qdrant:
+    image: qdrant/qdrant:latest
+    container_name: graph_rag_qdrant
+    restart: always
+    ports:
+      - "6333:6333"
+      - "6334:6334"
+    volumes:
+      - qdrant_data:/qdrant/storage
+
+  mlflow:
+    image: ghcr.io/mlflow/mlflow:v2.15.1
+    container_name: graph_rag_mlflow
+    hostname: mlflow
+    ports:
+      - "5000:5000"
+    environment:
+      - MLFLOW_BACKEND_STORE_URI=sqlite:///mlflow.db
+      - MLFLOW_DEFAULT_ARTIFACT_ROOT=/mlruns
+    volumes:
+      - mlflow_data:/mlruns
+    command: mlflow server --host 0.0.0.0 --port 5000 --backend-store-uri sqlite:///mlflow.db --default-artifact-root /mlruns
+
+  # --- VPN Sidecar Proxy (Finland) ---
+  finland_proxy:
+    image: teddysun/xray:latest
+    container_name: finland_proxy
+    restart: always
+    healthcheck:
+      test: ["CMD", "xray", "version"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    volumes:
+      - ./xray_config.json:/etc/xray/config.json
+
+  # --- Telegram Bot ---
+  bot:
+    build: .
+    container_name: graph_rag_bot
+    restart: always
+    env_file:
+      - .env.db
+      - .env.scraper
+    command: python src/bot/bot_service.py
+    volumes:
+      - ./src:/opt/airflow/src
+      - mlflow_data:/mlruns
+      - C:/Users/Kirill/.cache/huggingface:/home/airflow/.cache/huggingface
+    depends_on:
+      postgres:
+        condition: service_started
+      finland_proxy:
+        condition: service_started
+      airflow-init:
+        condition: service_completed_successfully
+    environment:
+      - POSTGRES_HOST=postgres
+      - NEO4J_URI=bolt://neo4j:7687
+      - QDRANT_HOST=qdrant
+      - MLFLOW_TRACKING_URI=http://mlflow:5000
+      - MLFLOW_DEFAULT_ARTIFACT_ROOT=/mlruns
+      - AIRFLOW_HOST=airflow-webserver
+      - HTTP_PROXY=http://finland_proxy:2081
+      - HTTPS_PROXY=http://finland_proxy:2081
+      - ALL_PROXY=socks5://finland_proxy:2080
+      - NO_PROXY=localhost,127.0.0.1,postgres,neo4j,qdrant,mlflow,airflow-webserver,finland_proxy
+
+  # --- Airflow Stack ---
+  airflow-common: &airflow-common
+    build: .
+    env_file:
+      - .env.db
+      - .env.scraper
+    environment:
+      AIRFLOW__CORE__EXECUTOR: LocalExecutor
+      AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://postgres:mysecretpassword@postgres:5432/graph_rag
+      AIRFLOW__CORE__FERNET_KEY: ''
+      AIRFLOW__CORE__LOAD_EXAMPLES: 'false'
+      AIRFLOW__API__AUTH_BACKENDS: 'airflow.api.auth.backend.basic_auth'
+      AIRFLOW__CORE__DAGBAG_IMPORT_TIMEOUT: 120
+      PYTHONPATH: /opt/airflow
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: 5432
+      NEO4J_URI: bolt://neo4j:7687
+      QDRANT_HOST: qdrant
+      MLFLOW_TRACKING_URI: http://mlflow:5000
+      MLFLOW_DEFAULT_ARTIFACT_ROOT: /tmp/mlruns
+      HTTP_PROXY: http://finland_proxy:2081
+      HTTPS_PROXY: http://finland_proxy:2081
+      ALL_PROXY: socks5://finland_proxy:2080
+      NO_PROXY: localhost,127.0.0.1,postgres,neo4j,qdrant,mlflow,airflow-webserver,finland_proxy
+    volumes:
+      - ./dags:/opt/airflow/dags
+      - ./logs:/opt/airflow/logs
+      - ./src:/opt/airflow/src
+      - ./anon.session:/opt/airflow/anon.session
+      - C:/Users/Kirill/.cache/huggingface:/home/airflow/.cache/huggingface
+    depends_on:
+      - postgres
+      - finland_proxy
+
+  airflow-webserver:
+    <<: *airflow-common
+    container_name: airflow-webserver
+    command: webserver
+    ports:
+      - "8080:8080"
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "http://localhost:8080/health"]
+      interval: 10s
+      timeout: 10s
+      retries: 5
+    depends_on:
+      postgres:
+        condition: service_started
+      finland_proxy:
+        condition: service_started
+      airflow-init:
+        condition: service_completed_successfully
+
+  airflow-scheduler:
+    <<: *airflow-common
+    container_name: airflow-scheduler
+    command: scheduler
+    depends_on:
+      postgres:
+        condition: service_started
+      finland_proxy:
+        condition: service_started
+      airflow-init:
+        condition: service_completed_successfully
+
+  airflow-worker:
+    <<: *airflow-common
+    container_name: airflow-worker
+    command: celery worker
+    depends_on:
+      postgres:
+        condition: service_started
+      finland_proxy:
+        condition: service_started
+      airflow-init:
+        condition: service_completed_successfully
+
+  airflow-init:
+    <<: *airflow-common
+    container_name: airflow-init
+    user: root
+    command: >
+      bash -c "mkdir -p /mlruns && chown -R 50000:0 /mlruns &&
+      airflow db init &&
+      airflow users create --username admin --firstname admin --lastname admin --role Admin --email admin@example.com --password admin"
+    volumes:
+      - mlflow_data:/mlruns
+    depends_on:
+      - postgres
+
+volumes:
+  pg_data:
+  neo4j_data:
+  qdrant_data:
+  mlflow_data:
