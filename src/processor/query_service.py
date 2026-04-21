@@ -22,6 +22,7 @@ from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.output_parsers import StrOutputParser
 from src.processor.text_utils import normalize_text, ensure_string
+from src.common.telemetry import telemetry
 from src.config.config_retrieval import (
     TOP_K_MODE_1, 
     TOP_K_SEARCH_MODE_2, 
@@ -129,6 +130,28 @@ class GraphRAGSearcher:
             return list(set(normalized_active))
         except Exception: return []
 
+    def _get_llm_info(self, obj):
+        """Разбирает цепочки LangChain и находит информацию о модели."""
+        targets = []
+        if hasattr(obj, 'steps'): targets = obj.steps
+        elif hasattr(obj, 'middle'): targets = [obj.middle]
+        elif hasattr(obj, 'bound'): targets = [obj.bound]
+        else: targets = [obj]
+        
+        for t in targets:
+            # Сначала проверяем явное соответствие нашим инстансам
+            if hasattr(self, 'llm_local') and t == self.llm_local: return MODEL_MODE_1, "Mode 1"
+            if hasattr(self, 'llm_mode_2') and t == self.llm_mode_2: return MODEL_MODE_2, "Mode 2"
+            if hasattr(self, 'llm_mode_3') and t == self.llm_mode_3: return MODEL_MODE_3, "Mode 3"
+            if hasattr(self, 'llm_web') and t == self.llm_web: return MODEL_WEB_SYNTHESIS, "Web Synthesis"
+            if hasattr(self, 'llm_helper') and t == self.llm_helper: return MODEL_HELPER, "Helper"
+            
+            # Если нет прямого матча, пробуем вытащить имя из атрибутов
+            if hasattr(t, 'model_name'): return t.model_name, "LLM"
+            if hasattr(t, 'model'): return t.model, "LLM"
+        
+        return MODEL_MODE_1, "Mode 1" # Дефолт-заглушка
+
     async def _handle_llm_error(self, e: Exception, attempt: int, delays: list, on_status=None):
         err_str = str(e).lower()
         is_quota = any(x in err_str for x in ["429", "resource_exhausted", "quota"])
@@ -146,22 +169,51 @@ class GraphRAGSearcher:
 
     async def _invoke_with_retry(self, chain: Any, input_data: Any, on_status: Any = None) -> Any:
         delays = [5, 10, 20, 40]
+        model_name, mode = (MODEL_HELPER, "Helper") if isinstance(chain, str) else self._get_llm_info(chain)
+        
         for i in range(len(delays) + 1):
             try:
-                if isinstance(chain, str): return await self.llm_helper.ainvoke(chain)
-                return await chain.ainvoke(input_data)
+                if isinstance(chain, str): 
+                    resp = await self.llm_helper.ainvoke(chain)
+                else:
+                    resp = await chain.ainvoke(input_data)
+                
+                telemetry.record_request(model_name, mode, "success")
+                
+                if hasattr(resp, 'response_metadata') and 'token_usage' in resp.response_metadata:
+                    usage = resp.response_metadata['token_usage']
+                    telemetry.record_tokens(model_name, mode, 
+                                           prompt_tokens=usage.get('prompt_tokens', 0), 
+                                           completion_tokens=usage.get('completion_tokens', 0))
+                else:
+                    telemetry.record_tokens(model_name, mode, 
+                                           prompt_tokens=self._estimate_tokens(str(input_data)), 
+                                           completion_tokens=self._estimate_tokens(ensure_string(resp.content if hasattr(resp, 'content') else resp)))
+                return resp
             except Exception as e:
+                telemetry.record_request(model_name, mode, "error")
                 action, msg = await self._handle_llm_error(e, i, delays, on_status)
                 if action == "retry": continue
                 raise Exception(msg)
 
     async def _stream_with_retry(self, chain: Any, input_data: Dict[str, Any], on_status: Any = None) -> AsyncGenerator[str, None]:
         delays = [10, 20, 30, 60]
+        model_name, mode = self._get_llm_info(chain)
+
         for i in range(len(delays) + 1):
             try:
-                async for chunk in chain.astream(input_data): yield chunk
+                full_content = ""
+                async for chunk in chain.astream(input_data):
+                    full_content += chunk
+                    yield chunk
+                
+                telemetry.record_request(model_name, mode, "success")
+                telemetry.record_tokens(model_name, mode, 
+                                       prompt_tokens=self._estimate_tokens(str(input_data)), 
+                                       completion_tokens=self._estimate_tokens(full_content))
                 return
             except Exception as e:
+                telemetry.record_request(model_name, mode, "error")
                 action, msg = await self._handle_llm_error(e, i, delays, on_status)
                 if action == "retry": continue
                 raise Exception(msg)

@@ -185,8 +185,39 @@ services:
     depends_on:
       - postgres
 
+  # --- Monitoring ---
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: graph_rag_prometheus
+    restart: always
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml
+      - prometheus_data:/prometheus
+    ports:
+      - "9090:9090"
+    depends_on:
+      - bot
+
+  grafana:
+    image: grafana/grafana:latest
+    container_name: graph_rag_grafana
+    restart: always
+    environment:
+      - GF_SECURITY_ADMIN_PASSWORD=admin
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./grafana/provisioning/datasources:/etc/grafana/provisioning/datasources
+      - ./grafana/provisioning/dashboards/provider.yml:/etc/grafana/provisioning/dashboards/provider.yml
+      - ./grafana/dashboards:/etc/grafana/dashboards
+    ports:
+      - "3000:3000"
+    depends_on:
+      - prometheus
+
 volumes:
   pg_data:
   neo4j_data:
   qdrant_data:
   mlflow_data:
+  prometheus_data:
+  grafana_data:

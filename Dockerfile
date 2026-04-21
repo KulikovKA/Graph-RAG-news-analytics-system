@@ -16,12 +16,12 @@ RUN pip config set global.index-url https://pypi.tuna.tsinghua.edu.cn/simple
 # Обновляем pip и устанавливаем поддержку SOCKS
 RUN pip install --no-cache-dir --upgrade pip "httpx[socks]" aiohttp-socks
 
-# Установка зависимостей из requirements.txt
+# 1. Сначала ставим Torch CPU (экономия места), чтобы зависимости (sentence-transformers) не качали CUDA версию
+RUN pip install --no-cache-dir torch --index-url https://download.pytorch.org/whl/cpu
+
+# 2. Установка зависимостей из requirements.txt
 COPY --chown=airflow:root requirements.txt .
 RUN pip install --no-cache-dir --timeout 1000 --retries 10 -r requirements.txt
-
-# Отдельная установка Torch CPU (экономия места)
-RUN pip install --no-cache-dir torch --index-url https://download.pytorch.org/whl/cpu
 
 # Установка Mystem (бинарный файл)
 USER root

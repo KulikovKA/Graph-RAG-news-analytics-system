@@ -1,3 +1,5 @@
+--extra-index-url https://download.pytorch.org/whl/cpu
+
 # Базовая математика и работа с данными
 numpy==1.26.4
 pandas>=2.2.2
@@ -27,6 +29,8 @@ langgraph
 neo4j
 qdrant-client
 sentence-transformers
+torch
 
 # Мониторинг и эксперименты
 mlflow
+prometheus-client

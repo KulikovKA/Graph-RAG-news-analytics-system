@@ -39,6 +39,7 @@ from src.processor.query_service import (
 
 from src.config.config_models import MODEL_EXTRACTION
 from src.common.models import Base, News, ProcessingChannel
+from src.common.telemetry import telemetry
 
 # Загрузка конфигурации
 load_dotenv(os.path.join(PROJECT_ROOT, '.env.db'))
@@ -956,6 +957,10 @@ async def main():
     bot = Bot(token=BOT_TOKEN, session=session)
     
     logger.info("Бот запущен...")
+    
+    # Запуск сервера метрик Prometheus (порт 8000)
+    telemetry.start_server(8000)
+    
     # Запускаем фоновый мониторинг
     asyncio.create_task(monitor_processing())
     

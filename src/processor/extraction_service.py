@@ -34,6 +34,7 @@ sys.path.append(PROJECT_ROOT)
 # Загрузка конфигурации
 load_dotenv(os.path.join(PROJECT_ROOT, '.env.db'))
 from src.common.models import ProcessingChannel, News
+from src.common.telemetry import telemetry
 from src.config.config_models import MODEL_EXTRACTION
 from src.config.config_retrieval import CHUNK_SIZE, CHUNK_OVERLAP
 
@@ -227,11 +228,33 @@ async def extraction_node(state: GraphState):
         async def invoke_with_retry(chain, input_data):
             """Умный повтор для LLM вызовов при экстракции (сеть + квоты)."""
             delays = [5, 10, 20, 40, 60]
+            model_name = MODEL_EXTRACTION
+            mode = "Extraction"
+            
             for i, delay in enumerate(delays + [None]):
                 try:
                     resp = await chain.ainvoke(input_data)
+                    
+                    # Record success
+                    telemetry.record_request(model_name, mode, "success")
+                    
+                    # Record tokens if available
+                    if hasattr(resp, 'response_metadata') and 'token_usage' in resp.response_metadata:
+                        usage = resp.response_metadata['token_usage']
+                        telemetry.record_tokens(model_name, mode, 
+                                               prompt_tokens=usage.get('prompt_tokens', 0), 
+                                               completion_tokens=usage.get('completion_tokens', 0))
+                    else:
+                        # Simple estimation for extraction
+                        prompt_text = str(input_data)
+                        completion_text = ensure_string(resp.content if hasattr(resp, 'content') else resp)
+                        telemetry.record_tokens(model_name, mode, 
+                                               prompt_tokens=int(len(prompt_text)/3), 
+                                               completion_tokens=int(len(completion_text)/3))
+                    
                     return resp
                 except Exception as e:
+                    telemetry.record_request(model_name, mode, "error")
                     err_str = str(e).lower()
                     is_quota = any(x in err_str for x in ["429", "resource_exhausted", "quota"])
                     is_network = any(x in err_str for x in ["connect", "disconnect", "timeout", "network", "unreachable", "ssl"])
