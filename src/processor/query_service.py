@@ -258,6 +258,8 @@ class GraphRAGSearcher:
     async def ask(self, query: str, on_status=None, web_context: str = None) -> AsyncGenerator[str, None]:
         start_time = time.perf_counter(); full_answer = ""
         with mlflow.start_run(run_name=f"Mode 1: {query[:30]}"):
+            mlflow.log_param("query", query)
+            mlflow.log_param("mode", "Mode 1")
             try:
                 if not web_context:
                     if on_status: await on_status("🔍 Анализ вопроса...")
@@ -269,11 +271,19 @@ class GraphRAGSearcher:
                     if "не обнаружено" in graph_context.lower() and vector_context.count("- ") < GAP_VECTOR_COUNT_THRESHOLD:
                         yield SIGNAL_GAP_DETECTED; return
                 else: vector_context = graph_context = "Локальные данные не использованы."
+                
+                mlflow.log_text(graph_context, "graph_context.txt")
+                mlflow.log_text(vector_context, "vector_context.txt")
+                
                 prompt = ChatPromptTemplate.from_template("Ты ассистент GraphRAG.\nГРАФ: {graph_context}\nТЕКСТЫ: {vector_context}\nWEB: {web_context}\nВопрос: {query}")
                 chain = prompt | (self.llm_web if web_context else self.llm_local) | StrOutputParser()
                 async for chunk in self._stream_with_retry(chain, {"graph_context": graph_context, "vector_context": vector_context, "web_context": web_context or "Нет данных", "query": query}, on_status):
                     full_answer += chunk; yield chunk
-            except Exception as e: yield f"⚠️ Ошибка: {str(e)}"
+                
+                mlflow.log_text(full_answer, "answer.txt")
+            except Exception as e: 
+                mlflow.log_param("error", str(e))
+                yield f"⚠️ Ошибка: {str(e)}"
 
 class AdvancedAnalyticalRouter(GraphRAGSearcher):
     def __init__(self):
@@ -291,6 +301,8 @@ class AdvancedAnalyticalRouter(GraphRAGSearcher):
     async def ask(self, query: str, on_status=None, web_context: str = None) -> AsyncGenerator[str, None]:
         start_time = time.perf_counter(); full_answer = ""
         with mlflow.start_run(run_name=f"Mode 2: {query[:30]}"):
+            mlflow.log_param("query", query)
+            mlflow.log_param("mode", "Mode 2")
             try:
                 if not web_context:
                     if on_status: await on_status("📡 Глубокий поиск...")
@@ -306,15 +318,26 @@ class AdvancedAnalyticalRouter(GraphRAGSearcher):
                     if "не обнаружено" in graph_context.lower() and len(texts) < (GAP_VECTOR_COUNT_THRESHOLD + 1):
                         yield SIGNAL_GAP_DETECTED; return
                 else: graph_context = vector_context = "Локальные данные не использованы."
+                
+                mlflow.log_text(graph_context, "graph_context.txt")
+                mlflow.log_text(vector_context, "vector_context.txt")
+                
                 prompt = ChatPromptTemplate.from_template("Ты аналитик.\nГРАФ: {graph_context}\nТЕКСТЫ: {vector_context}\nWEB: {web_context}\nВопрос: {query}")
                 chain = prompt | self.llm_mode_2 | StrOutputParser()
                 async for chunk in self._stream_with_retry(chain, {"graph_context": graph_context, "vector_context": vector_context, "web_context": web_context or "Нет данных", "query": query}, on_status):
                     full_answer += chunk; yield chunk
-            except Exception as e: yield f"⚠️ Ошибка: {str(e)}"
+                
+                mlflow.log_text(full_answer, "answer.txt")
+            except Exception as e: 
+                mlflow.log_param("error", str(e))
+                yield f"⚠️ Ошибка: {str(e)}"
 
     async def generate_digest(self, topic: str, date_input: str, on_status=None, web_context: str = None) -> AsyncGenerator[str, None]:
         start_time = time.perf_counter(); full_answer = ""
         with mlflow.start_run(run_name=f"Mode 3: {topic[:30]}"):
+            mlflow.log_param("topic", topic)
+            mlflow.log_param("date_range", date_input)
+            mlflow.log_param("mode", "Mode 3")
             try:
                 if not web_context:
                     if on_status: await on_status("📅 Валидация дат...")
@@ -340,6 +363,9 @@ class AdvancedAnalyticalRouter(GraphRAGSearcher):
                     graph_context = await self.search_neo4j(list(set(entities))[:10])
                     vector_context = self._trim_context(texts, graph_context)
                 else: graph_context = vector_context = "Локальные данные не использованы."
+                
+                mlflow.log_text(graph_context, "graph_context.txt")
+                mlflow.log_text(vector_context, "vector_context.txt")
                 
                 prompt = ChatPromptTemplate.from_template("""
 ТЫ — БЕЗЖАЛОСТНЫЙ НОВОСТНОЙ КОРРЕКТОР. 
@@ -377,7 +403,11 @@ class AdvancedAnalyticalRouter(GraphRAGSearcher):
                 chain = prompt | self.llm_mode_3 | StrOutputParser()
                 async for chunk in self._stream_with_retry(chain, {"query": topic, "graph_context": graph_context, "vector_context": vector_context}, on_status):
                     full_answer += chunk; yield chunk
-            except Exception as e: yield f"⚠️ Ошибка: {str(e)}"
+                
+                mlflow.log_text(full_answer, "answer.txt")
+            except Exception as e: 
+                mlflow.log_param("error", str(e))
+                yield f"⚠️ Ошибка: {str(e)}"
 
     async def _get_available_date_range(self) -> tuple:
         try:
