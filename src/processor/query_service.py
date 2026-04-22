@@ -90,6 +90,38 @@ class GraphRAGSearcher:
             from langchain_community.tools.tavily_search import TavilySearchResults
             self.tavily = TavilySearchResults(api_key=tavily_key, max_results=5)
 
+    async def web_search(self, query: str, depth: str = "basic") -> str:
+        """Поиск в глобальном интернете через Tavily (Fallback)."""
+        if not self.tavily:
+            return "⚠️ Tavily API Key не настроен. Веб-поиск недоступен."
+        try:
+            results = await self.tavily.ainvoke({"query": query})
+            
+            if not results:
+                return "В глобальном интернете информации по данному запросу не обнаружено."
+            
+            # Если результат уже строка (инструмент отформатировал сам), возвращаем её
+            if isinstance(results, str):
+                return results
+
+            # Если результат - список (стандарт для langchain_tavily)
+            if isinstance(results, list):
+                formatted_results = []
+                for res in results:
+                    if isinstance(res, dict):
+                        url = res.get('url', 'URL неизвестен')
+                        content = res.get('content', '')
+                        formatted_results.append(f"🔗 {url}\n📝 {content}")
+                    elif isinstance(res, str):
+                        formatted_results.append(res)
+                
+                return "\n\n".join(formatted_results)
+            
+            return str(results)
+        except Exception as e:
+            return f"⚠️ Ошибка внешнего поиска (Tavily): {str(e)}"
+
+
     @property
     def embeddings(self):
         if self._embeddings is None:
